@@ -1,5 +1,6 @@
 const mqtt = require('mqtt');
 const mongoose = require('mongoose');
+const WebSocket = require('ws'); // Agregamos el paquete WebSocket
 
 // Conectar a la base de datos MongoDB
 mongoose.connect('mongodb+srv://rabbiafacundo:FACUNDO@cluster0.yy82i.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0')
@@ -24,8 +25,29 @@ const Temperatura = mongoose.model('Temperatura', temperaturaSchema);
 const client = mqtt.connect('mqtt://broker.hivemq.com');
 
 // Umbrales de temperatura
-const THRESHOLD_COLD = 15;  // Menor o igual a 15°C = Frío
-const THRESHOLD_HOT = 30;   // Mayor o igual a 30°C = Caluroso
+const THRESHOLD_COLD = 35;  // Menor o igual a 35°C = Frío
+const THRESHOLD_HOT = 40;   // Mayor o igual a 40°C = Caluroso
+
+// Crear el servidor WebSocket
+const wss = new WebSocket.Server({ port: 8080 }); // Creamos un servidor WebSocket en el puerto 8080
+
+// Función para enviar datos a todos los clientes conectados por WebSocket
+function broadcast(data) {
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify(data));
+        }
+    });
+}
+
+// WebSocket: Conexión inicial
+wss.on('connection', (ws) => {
+    console.log('Cliente WebSocket conectado');
+    
+    ws.on('close', () => {
+        console.log('Cliente WebSocket desconectado');
+    });
+});
 
 client.on('connect', () => {
     console.log('Conectado al broker MQTT');
@@ -64,8 +86,8 @@ client.on('message', async (topic, message) => {
                 estado = 'normal';
             }
 
-            // Publicar el estado
-            client.publish('sensor/estado', `El estado es: ${estado}`);
+            // Publicar el estado en el broker MQTT, estos es lo que enviamos a TSH
+            client.publish('estado', `El estado es: ${estado}`);
             console.log(`Estado publicado: ${estado}`);
 
             // Almacenar en la base de datos
@@ -73,6 +95,13 @@ client.on('message', async (topic, message) => {
             try {
                 await nuevaTemperatura.save();
                 console.log(`Temperatura ${temperatura}°C y Humedad ${humedad}% almacenadas en la base de datos con estado '${estado}'`);
+
+                // Enviar los datos al cliente WebSocket
+                broadcast({
+                    temperatura,
+                    humedad,
+                    estado
+                });
             } catch (error) {
                 console.error('Error al almacenar la temperatura en la base de datos:', error);
             }
